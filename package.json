@@ -1,0 +1,15 @@
+{
+  "name": "antipause-suite",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A browser userscript for recovering unexpected media pauses.",
+  "license": "MIT",
+  "scripts": {
+    "check": "node --check APS.user.js",
+    "test": "node --test",
+    "validate": "npm run check && npm test"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

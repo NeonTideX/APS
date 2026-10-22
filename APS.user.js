@@ -1,23 +1,10 @@
 // ==UserScript==
-// @name         AntiPause Suite Ultimate V23.12.0
+// @name         AntiPause Suite
 // @namespace    aps-v23
-// @version      23.12.0
-// @description  Adaptive media persistence framework – V23.12: Deep refactor of V23.11.
-//               P0: deepMerge circular-ref guard; _mergeStructural depth guard;
-//                   PageBridge retry Promise .catch; FinalizationRegistry clone fix.
-//               P1: CircuitBreaker sliding-window; RecoveryBudget global throttle;
-//                   _factorScores / Watchdog cfg parameter threading; tryPlay helper;
-//                   Scheduler single-task pause/resume + task execution stats.
-//               P2: ServiceContainer async dispose; ModuleRegistry.verifyAll;
-//                   RecoveryStrategyRegistry.chain cache; DOMObserver empty-subtree skip;
-//                   createMediaInstance factory; navigator.onLine soft check.
-//               P3: Lifecycle.destroy timeout guard; PAUSE_CAUSES shared constant;
-//                   PluginHotReload native-code reject; LIFECYCLE_CHANGED event;
-//                   active-instance priority boost in enqueueRecovery.
-//               P4: BackgroundShield idempotent lock resolve; HLSShield run try/catch;
-//                   FrameBridge origin length guard; LearningEngine config hot-reload;
-//                   RingHistory.pushAll; targetOrigin max length.
-//               Debug: All 14 diagnostic entries restored + 4 new entries.
+// @version      1.0.0
+// @description  Recover unexpected media pauses with user-intent detection, playback monitoring, and background support.
+// @homepageURL  https://github.com/NeonTideX/APS
+// @supportURL   https://github.com/NeonTideX/APS/issues
 // @match        *://*/*
 // @run-at       document-start
 // @grant        none
@@ -81,8 +68,8 @@ const APS_LIFECYCLE = Object.freeze({
 });
 
 const APS = {
-    name: 'APS23',
-    version: '23.12.0',
+    name: 'APS',
+    version: '1.0.0',
     started: false,
     destroyed: false,
     bootTime: Date.now(),
@@ -780,7 +767,8 @@ const ConfigStore = {
     },
 
     patch(validatedPatch) {
-        deepMerge(this._overrides, validatedPatch);
+        // Own the stored values so snapshots cannot freeze or alias caller input.
+        deepMerge(this._overrides, deepClone(validatedPatch));
         this._trackDirtyPaths(validatedPatch);
         this._frozen = null; this._version++;
         this._notifyPathSubscribers(validatedPatch);
@@ -6011,8 +5999,9 @@ const ConfigValidator = {
         for (const [path, rule] of Object.entries(this._rules)) {
             if (!(path in flat)) continue;
             const val = flat[path];
-            if (typeof val !== rule.type) {
-                errors.push(path + ': expected ' + rule.type + ', got ' + typeof val); continue;
+            const actualType = Array.isArray(val) ? 'array' : typeof val;
+            if (actualType !== rule.type) {
+                errors.push(path + ': expected ' + rule.type + ', got ' + actualType); continue;
             }
             if (rule.type === 'number' && !isFinite(val)) {
                 errors.push(path + ': value is NaN or Infinity'); continue;
