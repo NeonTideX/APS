@@ -5717,7 +5717,7 @@ function setupErrorIsolate() {
 
 /* ═══════════════════════════════════════════════════════════
  * §51  Debug Console API
- * [RESTORED] All 14 missing diagnostic entries from V23.10.
+ * Diagnostic queries and runtime controls.
  * [NEW]      4 additional entries: recoveryBudget, moduleHealth,
  *            taskStats, assertEnabled.
  * @provides: mountDebugAPI
@@ -5783,7 +5783,7 @@ function mountDebugAPI() {
         cacheSize()       { return CacheManager.size; },
         circuitState()    { return CircuitBreaker._state; },
 
-        /* ── RESTORED from V23.10 ────────────────────────────── */
+        /* ── Extended diagnostics ────────────────────────────── */
         bootLayers() {
             const { layers, cyclic } = ModuleRegistry.topoLayers();
             return { layers, cyclic };
@@ -5862,7 +5862,7 @@ function mountDebugAPI() {
         },
         activeStateTimers() { return StateMachine._activeTimerIds.size; },
 
-        /* ── NEW in V23.12 ───────────────────────────────────── */
+        /* ── Recovery diagnostics ───────────────────────────────────── */
         recoveryBudget() {
             return {
                 windowStart: RecoveryBudget._windowStart,
@@ -5919,7 +5919,7 @@ function mountDebugAPI() {
         resetCircuitBreaker() { CircuitBreaker.reset(); return 'Circuit breaker reset'; },
         destroy()             { Lifecycle.destroy(); },
 
-        /* ── RESTORED from V23.10 ────────────────────────────── */
+        /* ── Extended diagnostics ────────────────────────────── */
         resetShadowCache() {
             Discovery.reset();
             return 'Shadow DOM cache reset';
@@ -5929,7 +5929,7 @@ function mountDebugAPI() {
             return 'Dirty eval: ' + (changed ? 'score changed' : 'no change') + ', dirty=' + IntentEngine.dirtyCount;
         },
 
-        /* ── NEW in V23.12 ───────────────────────────────────── */
+        /* ── Recovery diagnostics ───────────────────────────────────── */
         resetRecoveryBudget() {
             RecoveryBudget.reset();
             return 'Recovery budget reset';

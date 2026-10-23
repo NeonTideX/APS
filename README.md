@@ -4,7 +4,9 @@ AntiPause Suite (APS) is a browser userscript for monitoring HTML audio and vide
 
 ## Installation
 
-Install a userscript manager such as Tampermonkey or Violentmonkey, then open **[APS.user.js](https://raw.githubusercontent.com/NeonTideX/APS/main/APS.user.js)** and accept the installation prompt. If your manager does not intercept the link, import the downloaded file or paste its contents into a new script.
+Install a userscript manager such as Tampermonkey or Violentmonkey, then download **[APS.user.js from the V1 release](https://github.com/NeonTideX/APS/releases/download/v1.0.0/APS.user.js)**. Open or import the downloaded file with your userscript manager. If needed, paste its contents into a new script.
+
+See the [V1 release notes](https://github.com/NeonTideX/APS/releases/tag/v1.0.0) for the release summary and downloadable assets.
 
 The script runs at `document-start` on HTTP and HTTPS pages with `@grant none`. Disable other installations of APS before enabling it, then reload the page and start playback normally.
 
