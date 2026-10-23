@@ -12,4 +12,6 @@ test('userscript metadata and runtime version match the package release', () => 
     assert.ok(source.startsWith('// ==UserScript=='));
     assert.equal(source.match(/^\/\/ @version\s+(\S+)/m)?.[1], pkg.version);
     assert.equal(source.match(/const APS = \{[\s\S]*?version: '([^']+)'/)?.[1], pkg.version);
+    assert.equal(pkg.license, 'GPL-3.0-or-later');
+    assert.equal(source.match(/^\/\/ @license\s+(\S+)/m)?.[1], pkg.license);
 });

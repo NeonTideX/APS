@@ -9,8 +9,16 @@
 // @run-at       document-start
 // @grant        none
 // @noframe
-// @license      MIT
+// @license      GPL-3.0-or-later
 // ==/UserScript==
+
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 AntiPause Suite contributors
+// This program is free software: you can redistribute it and/or modify it
+// under the terms of the GNU General Public License as published by the
+// Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+// This program is distributed without any warranty. See LICENSE for details.
 
 (function () {
 'use strict';
@@ -603,7 +611,7 @@ class RingHistory {
     }
     writeTo(target) {
         target.length = this._count;
-        for (let i = 0; i < this._count; i++) target[i] = this._buf[(this._idx + i) % this._cap];
+        for (let i = 0; i < this._count; i++) target[i] = this._buf[(this._start + i) % this._cap];
         return target;
     }
     last() { return this._count === 0 ? undefined : this._buf[(this._idx - 1 + this._cap) % this._cap]; }
@@ -611,26 +619,27 @@ class RingHistory {
         if (this._count === 0) return undefined;
         return this._count < this._cap ? this._buf[0] : this._buf[this._idx];
     }
+    get _start() { return (this._idx - this._count + this._cap) % this._cap; }
     get length() { return this._count; }
     get capacity() { return this._cap; }
     clear() { this._buf.fill(undefined); this._idx = 0; this._count = 0; }
-    *[Symbol.iterator]() { for (let i = 0; i < this._count; i++) yield this._buf[(this._idx + i) % this._cap]; }
-    forEach(fn) { for (let i = 0; i < this._count; i++) fn(this._buf[(this._idx + i) % this._cap], i); }
-    filter(fn) { const o=[]; for(let i=0;i<this._count;i++){const v=this._buf[(this._idx+i)%this._cap]; if(fn(v,i))o.push(v);} return o; }
-    some(fn) { for(let i=0;i<this._count;i++) if(fn(this._buf[(this._idx+i)%this._cap],i)) return true; return false; }
-    every(fn) { for(let i=0;i<this._count;i++) if(!fn(this._buf[(this._idx+i)%this._cap],i)) return false; return true; }
+    *[Symbol.iterator]() { for (let i = 0; i < this._count; i++) yield this._buf[(this._start + i) % this._cap]; }
+    forEach(fn) { for (let i = 0; i < this._count; i++) fn(this._buf[(this._start + i) % this._cap], i); }
+    filter(fn) { const o=[]; for(let i=0;i<this._count;i++){const v=this._buf[(this._start+i)%this._cap]; if(fn(v,i))o.push(v);} return o; }
+    some(fn) { for(let i=0;i<this._count;i++) if(fn(this._buf[(this._start+i)%this._cap],i)) return true; return false; }
+    every(fn) { for(let i=0;i<this._count;i++) if(!fn(this._buf[(this._start+i)%this._cap],i)) return false; return true; }
     reduce(fn, ...args) {
         let acc, si;
         if (args.length >= 1) { acc = args[0]; si = 0; }
-        else { if (this._count === 0) throw new TypeError('Reduce of empty RingHistory'); acc = this._buf[this._idx % this._cap]; si = 1; }
-        for (let i = si; i < this._count; i++) acc = fn(acc, this._buf[(this._idx + i) % this._cap], i);
+        else { if (this._count === 0) throw new TypeError('Reduce of empty RingHistory'); acc = this._buf[this._start]; si = 1; }
+        for (let i = si; i < this._count; i++) acc = fn(acc, this._buf[(this._start + i) % this._cap], i);
         return acc;
     }
-    find(fn) { for(let i=0;i<this._count;i++){const v=this._buf[(this._idx+i)%this._cap]; if(fn(v,i)) return v;} return undefined; }
-    aggregate(fn, initial) { let acc=initial; for(let i=0;i<this._count;i++) acc=fn(acc,this._buf[(this._idx+i)%this._cap],i); return acc; }
+    find(fn) { for(let i=0;i<this._count;i++){const v=this._buf[(this._start+i)%this._cap]; if(fn(v,i)) return v;} return undefined; }
+    aggregate(fn, initial) { let acc=initial; for(let i=0;i<this._count;i++) acc=fn(acc,this._buf[(this._start+i)%this._cap],i); return acc; }
     slice(start=0, end) {
         const s=Math.max(0,start), e=Math.min(this._count, end??this._count), r=[];
-        for(let i=s;i<e;i++) r.push(this._buf[(this._idx+i)%this._cap]);
+        for(let i=s;i<e;i++) r.push(this._buf[(this._start+i)%this._cap]);
         return r;
     }
 }
@@ -1067,14 +1076,11 @@ const CircuitBreaker = {
     _state: 'closed', _halfOpenAttempts: 0,
 
     record() {
-        if (RuntimeState.circuitOpen) {
-            if (this._state === 'half-open') {
-                this._state = 'open';
-                this._openUntil = Clock.wall() + getConfig().circuitBreaker.cooldownMs;
-                Logger.warn('CircuitBreaker: half-open probe failed, re-opening');
-            }
+        if (this._state === 'half-open') {
+            this._open();
             return;
         }
+        if (this._state === 'open') return;
         const now = Clock.wall();
         const cfg = getConfig().circuitBreaker;
         this._errors.push(now);
@@ -1082,28 +1088,34 @@ const CircuitBreaker = {
         const recentCount = this._errors.aggregate(
             (acc, t) => (now - t < cfg.windowMs) ? acc + 1 : acc, 0);
         if (recentCount >= cfg.maxErrors) {
-            RuntimeState.circuitOpen = true;
-            this._state = 'open';
-            this._openUntil = now + cfg.cooldownMs;
-            APS.lifecycle = APS_LIFECYCLE.RECOVERING;
-            Logger.error('Circuit breaker OPEN – lifecycle → RECOVERING');
-            const sched = ServiceContainer.get('scheduler');
-            if (sched) sched.pause();
-            this._resetTimer = setTimeout(() => {
-                this._resetTimer = null;
-                this._state = 'half-open';
-                this._halfOpenAttempts = 0;
-                RuntimeState.circuitOpen = false;
-                this._errors.clear();
-                const s2 = ServiceContainer.get('scheduler');
-                if (s2) s2.resume();
-                if (APS.lifecycle === APS_LIFECYCLE.RECOVERING) APS.lifecycle = APS_LIFECYCLE.READY;
-                Logger.log('Circuit breaker → HALF_OPEN');
-            }, cfg.cooldownMs);
+            this._open();
         }
     },
-    isOpen() { return this._state === 'open' && Clock.wall() < this._openUntil; },
+    _open() {
+        const cfg = getConfig().circuitBreaker;
+        if (this._resetTimer !== null) clearTimeout(this._resetTimer);
+        RuntimeState.circuitOpen = true;
+        this._state = 'open';
+        this._openUntil = Clock.wall() + cfg.cooldownMs;
+        APS.lifecycle = APS_LIFECYCLE.RECOVERING;
+        Logger.error('Circuit breaker OPEN – lifecycle → RECOVERING');
+        const sched = ServiceContainer.get('scheduler');
+        if (sched) sched.pause();
+        this._resetTimer = setTimeout(() => {
+            this._resetTimer = null;
+            this._state = 'half-open';
+            this._halfOpenAttempts = 0;
+            RuntimeState.circuitOpen = false;
+            this._errors.clear();
+            const s2 = ServiceContainer.get('scheduler');
+            if (s2) s2.resume();
+            if (APS.lifecycle === APS_LIFECYCLE.RECOVERING) APS.lifecycle = APS_LIFECYCLE.READY;
+            Logger.log('Circuit breaker → HALF_OPEN');
+        }, cfg.cooldownMs);
+    },
+    isOpen() { return this._state === 'open'; },
     allowRequest() {
+        if (this.isOpen()) return false;
         if (this._state === 'half-open') {
             this._halfOpenAttempts++;
             return this._halfOpenAttempts <= CONST.HALF_OPEN_MAX_PROBES;
@@ -1114,9 +1126,15 @@ const CircuitBreaker = {
         if (this._state === 'half-open') { this._state = 'closed'; Logger.log('CircuitBreaker: half-open → CLOSED'); }
     },
     reset() {
+        const wasOpen = this.isOpen();
         this._errors.clear(); this._openUntil = 0; this._state = 'closed';
+        this._halfOpenAttempts = 0;
         RuntimeState.circuitOpen = false;
         if (this._resetTimer) { clearTimeout(this._resetTimer); this._resetTimer = null; }
+        if (wasOpen && !APS.destroyed) {
+            ServiceContainer.get('scheduler')?.resume();
+            if (APS.lifecycle === APS_LIFECYCLE.RECOVERING) APS.lifecycle = APS_LIFECYCLE.READY;
+        }
     }
 };
 
@@ -4154,7 +4172,7 @@ const RecoveryEngine = {
     _cancelTokens: new WeakMap(),
 
     async recover(instance, reason = RecoveryReason.UNKNOWN) {
-        const media = instance.media;
+        const media = instance?.media;
         if (!instance || !media) return false;
         if (instance.state === MEDIA_STATE.DESTROYED) return false;
         if (instance.userPaused || media.error) return false;
@@ -5586,6 +5604,7 @@ const Lifecycle = {
         /* Phase 1: Stop scheduling and observation */
         if (!phase('stop-scheduling', () => {
             Scheduler.stop();
+            CircuitBreaker.reset();
             GlobalResources.remove(Scheduler);
             DOMObserver.stop();
             ScoringPipeline.cancelScheduled();
@@ -5995,6 +6014,8 @@ const ConfigValidator = {
 
     validate(patch) {
         const errors = [];
+        this._validateShape(patch, DEFAULTS, '', errors, new WeakSet());
+        if (errors.length) return { ok: false, errors, value: patch };
         const flat = this._flatten(patch);
         for (const [path, rule] of Object.entries(this._rules)) {
             if (!(path in flat)) continue;
@@ -6031,6 +6052,40 @@ const ConfigValidator = {
             }
         }
         return { ok: errors.length === 0, errors, value: patch };
+    },
+
+    _validateShape(value, schema, path, errors, ancestors) {
+        const label = path || 'config';
+        if (Array.isArray(schema)) {
+            if (!Array.isArray(value)) errors.push(label + ': expected array');
+            return;
+        }
+        if (schema && typeof schema === 'object') {
+            if (!value || Object.prototype.toString.call(value) !== '[object Object]') {
+                errors.push(label + ': expected configuration object');
+                return;
+            }
+            if (ancestors.has(value)) {
+                errors.push(label + ': circular configuration reference');
+                return;
+            }
+            ancestors.add(value);
+            for (const key of Object.keys(value)) {
+                const childPath = path ? path + '.' + key : key;
+                if (!Object.prototype.hasOwnProperty.call(schema, key)) {
+                    errors.push(childPath + ': unknown config key');
+                    continue;
+                }
+                this._validateShape(value[key], schema[key], childPath, errors, ancestors);
+            }
+            ancestors.delete(value);
+            return;
+        }
+        if (typeof value !== typeof schema || value === null) {
+            errors.push(label + ': expected ' + typeof schema);
+        } else if (typeof value === 'number' && !Number.isFinite(value)) {
+            errors.push(label + ': expected finite number');
+        }
     },
 
     _flatten(obj, prefix = '') {
@@ -6576,7 +6631,10 @@ function boot() {
 }
 
 GlobalResources.add(() => Lifecycle.destroy());
-window.addEventListener('pagehide', () => Lifecycle.destroy(), { once: true });
+window.addEventListener('pagehide', event => {
+    // A cached page keeps its runtime so pageshow can resume recovery.
+    if (!event.persisted) Lifecycle.destroy();
+});
 
 boot();
 })();

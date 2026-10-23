@@ -102,3 +102,18 @@ test('invalid scalar settings remain rejected', () => {
         assert.equal(ConfigValidator.validate(patch).ok, false);
     }
 });
+
+test('malformed configuration is rejected without throwing or bypassing the schema', () => {
+    const { ConfigValidator } = loadConfig();
+    const circular = {};
+    circular.recovery = circular;
+    for (const patch of [null, [], 42, 'debug', circular,
+        { recovery: null }, { debug: {} }, { debug: null },
+        { recovery: { retry: {} } }, { recovery: { unknown: {} } },
+        { unknown: {} }, { hls: { nudge: Infinity } },
+        JSON.parse('{"__proto__":{"debug":true}}')]) {
+        assert.equal(ConfigValidator.validate(patch).ok, false);
+    }
+    assert.equal(ConfigValidator.validate({}).ok, true);
+    assert.equal(ConfigValidator.validate({ recovery: {} }).ok, true);
+});

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "description": "A browser userscript for recovering unexpected media pauses.",
-  "license": "MIT",
+  "license": "GPL-3.0-or-later",
   "scripts": {
     "check": "node --check APS.user.js",
     "test": "node --test",
