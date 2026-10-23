@@ -1,5 +1,9 @@
 # AntiPause Suite
 
+[![CI](https://github.com/NeonTideX/APS/actions/workflows/ci.yml/badge.svg)](https://github.com/NeonTideX/APS/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/NeonTideX/APS)](https://github.com/NeonTideX/APS/releases/latest)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](./LICENSE)
+
 AntiPause Suite (APS) is a browser userscript for monitoring HTML audio and video playback and attempting recovery from unexpected pauses and stalls. It combines media discovery, user-intent scoring, a playback state machine, and bounded recovery strategies in one dependency-free script.
 
 ## Installation
@@ -102,6 +106,12 @@ npm run validate
 This checks userscript syntax and runs regression tests for configuration validation and isolation, history ordering, circuit-breaker transitions, navigation cleanup, missing recovery inputs, and version metadata. Tests execute source sections with controlled dependencies; they do not replace end-to-end playback testing in real browsers.
 
 The package is marked private to prevent accidental npm publication; distribution uses the userscript file in this public repository.
+
+GitHub Actions runs validation on Node.js 22 and 24 for relevant pushes and pull requests. See [CONTRIBUTING.md](./CONTRIBUTING.md) for development, browser verification, and release conventions.
+
+## Support and contributions
+
+Use the [issue templates](https://github.com/NeonTideX/APS/issues/new/choose) for reproducible bugs and feature requests. Contributions should explain the behavior change and relevant validation. Report vulnerabilities through the private channel in [SECURITY.md](./SECURITY.md).
 
 ## License
 

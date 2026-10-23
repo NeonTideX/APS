@@ -1,0 +1,29 @@
+name: Bug report
+description: Report a reproducible playback or runtime problem.
+body:
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include APS version, browser version, operating system, and userscript manager/version.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Include a public page URL or minimal example, playback steps, and whether the tab was in the background. Remove private URLs and access tokens.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+      description: Explain what happened, what you expected, and whether disabling APS changes the result.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Configuration and diagnostics
+      description: Include relevant overrides and console errors. Redact personal information and media URL tokens.
