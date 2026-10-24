@@ -1,0 +1,23 @@
+{
+  "name": "antipause-suite",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A browser userscript for recovering unexpected media pauses.",
+  "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NeonTideX/APS.git"
+  },
+  "homepage": "https://github.com/NeonTideX/APS#readme",
+  "bugs": {
+    "url": "https://github.com/NeonTideX/APS/issues"
+  },
+  "scripts": {
+    "check": "node --check APS.user.js",
+    "test": "node --test",
+    "validate": "npm run check && npm test"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
