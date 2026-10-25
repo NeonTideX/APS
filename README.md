@@ -113,6 +113,13 @@ GitHub Actions runs validation on Node.js 22 and 24 for relevant pushes and pull
 
 Use the [issue templates](https://github.com/NeonTideX/APS/issues/new/choose) for reproducible bugs and feature requests. Contributions should explain the behavior change and relevant validation. Report vulnerabilities through the private channel in [SECURITY.md](./SECURITY.md).
 
+## Project resources
+
+- [Changelog](CHANGELOG.md) and [Releases](https://github.com/NeonTideX/APS/releases)
+- [Contributing](CONTRIBUTING.md), [community conduct](CODE_OF_CONDUCT.md), and [support](SUPPORT.md)
+- [Security policy](SECURITY.md)
+
+
 ## License
 
 Licensed under the **GNU General Public License, version 3 or (at your option) any later version** (`GPL-3.0-or-later`). See [LICENSE](./LICENSE) for the full GPL v3 text. The program is provided without warranty.

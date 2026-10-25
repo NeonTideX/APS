@@ -36,3 +36,5 @@ For a future runtime release:
 Keep published tags and assets immutable. Use a new version for subsequent runtime changes rather than silently replacing an existing download. GitHub automatically provides source archives; no npm publication is required.
 
 Contributions are distributed under the project's GPL-3.0-or-later license.
+
+See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community expectations and [RELEASING.md](RELEASING.md) for release commands.

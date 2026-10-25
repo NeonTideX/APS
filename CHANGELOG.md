@@ -1,6 +1,10 @@
 # Changelog
 
-## V1 (1.0.0) - 2026-10-23
+## [Unreleased]
+
+Changes after the latest published version will be recorded here.
+
+## [1.0.0] - 2026-10-25
 
 Initial public release of AntiPause Suite, distributed as the standalone `APS.user.js` userscript.
 
@@ -20,8 +24,15 @@ Initial public release of AntiPause Suite, distributed as the standalone `APS.us
 - Cancel circuit-breaker cooldown during teardown and preserve runtime state during back-forward cache navigation.
 - Safely ignore missing recovery instances.
 
+### Repository maintenance
+
+- Complete community guidance, support links, release metadata, and tagged distribution.
+
 ### Distribution and validation
 
 - Include technical documentation covering architecture, configuration, storage, and compatibility limits.
 - Provide JavaScript syntax checks and 15 automated regression tests; real-site playback compatibility requires browser testing.
 - License the project under GPL-3.0-or-later.
+
+[Unreleased]: https://github.com/NeonTideX/APS/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/NeonTideX/APS/releases/tag/v1.0.0

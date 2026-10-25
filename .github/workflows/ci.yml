@@ -7,13 +7,15 @@ on:
       - 'APS.user.js'
       - 'package.json'
       - 'test/**'
-      - '.github/workflows/ci.yml'
+      - '.github/**'
+      - '*.md'
   pull_request:
     paths:
       - 'APS.user.js'
       - 'package.json'
       - 'test/**'
-      - '.github/workflows/ci.yml'
+      - '.github/**'
+      - '*.md'
   workflow_dispatch:
 
 permissions:
