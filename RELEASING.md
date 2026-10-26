@@ -2,7 +2,7 @@
 
 APS is distributed through GitHub Releases. The installable userscript is also its complete runtime source.
 
-1. Use the product name V1 and synchronize the machine-readable version, currently 1.0.0, in userscript metadata, runtime code, and package.json.
+1. Use AntiPause Suite as the project name and V1 as the release designation. Synchronize the machine-readable version, currently 1.0.0, in userscript metadata, runtime code, and package.json.
 2. Consolidate the current V1 changes into its dated CHANGELOG.md entry and keep the README installation link pointed at the release asset.
 3. Run npm run validate and relevant manual browser checks. Wait for CI on the exact release commit.
 4. Create an annotated v1.0.0 tag on the exact release commit. When explicitly refreshing the existing V1 release, update the tag using a lease against its previously observed remote object so concurrent changes are not overwritten.

@@ -10,7 +10,7 @@ Run `npm run validate` for JavaScript changes. Add regression coverage for fixes
 
 For browser-facing changes, test the affected behavior with a userscript manager on a reproducible page. Include deliberate pause/resume, unexpected pause recovery, and background/foreground transitions when relevant. Report the browser and manager versions and any untested cases. Automated tests do not certify site compatibility.
 
-CI runs syntax checks and regression tests on Node.js 22 and 24 for code, test, package, and CI workflow changes. Documentation-only changes do not trigger it. GitHub Actions dependencies are pinned and checked monthly by Dependabot.
+CI runs syntax checks and regression tests on Node.js 22 and 24 for the source, tests, package metadata, repository configuration, and Markdown files selected by the workflow. GitHub Actions dependencies are pinned and checked monthly by Dependabot.
 
 ## Pull requests and reports
 

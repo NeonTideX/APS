@@ -1,4 +1,4 @@
-# AntiPause Suite V1
+# AntiPause Suite
 
 [![CI](https://github.com/NeonTideX/APS/actions/workflows/ci.yml/badge.svg)](https://github.com/NeonTideX/APS/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/NeonTideX/APS)](https://github.com/NeonTideX/APS/releases/latest)
@@ -8,11 +8,11 @@ AntiPause Suite (APS) is a browser userscript for monitoring HTML audio and vide
 
 ## Installation
 
-Install a userscript manager such as Tampermonkey or Violentmonkey, then download **[APS.user.js from the V1 release](https://github.com/NeonTideX/APS/releases/download/v1.0.0/APS.user.js)**. Open or import the downloaded file with your userscript manager. If needed, paste its contents into a new script.
+Install a userscript manager such as Tampermonkey or Violentmonkey, then download **[APS.user.js](https://github.com/NeonTideX/APS/releases/download/v1.0.0/APS.user.js)**. Open or import the downloaded file with your userscript manager. If needed, paste its contents into a new script.
 
-See the [V1 release notes](https://github.com/NeonTideX/APS/releases/tag/v1.0.0) for the release summary and downloadable assets.
+See the [release notes](https://github.com/NeonTideX/APS/releases/tag/v1.0.0) for the release summary and downloadable assets.
 
-The V1 release includes the current scheduler and recovery implementation. If V1 is already installed, import the updated file manually: the machine-readable version remains `1.0.0`, so an automatic version check may not offer the refreshed file.
+To replace an existing installation, import the updated file manually. This release uses version `1.0.0`, so an automatic version check may not offer a refreshed file with the same version.
 
 The script runs at `document-start` on HTTP and HTTPS pages with `@grant none`. Disable other installations of APS before enabling it, then reload the page and start playback normally.
 
@@ -39,7 +39,7 @@ Custom strategy functions may accept `(instance, reason, token)`. Existing two-a
 
 ## Configuration
 
-The page-context API is available as `window.__APS23`. The identifier and the `APS23_*` storage keys are compatibility identifiers. The product version is **V1**; userscript metadata and package metadata use the machine-readable version **1.0.0**.
+The page-context API is available as `window.__APS23`. This identifier and the `APS23_*` storage keys are retained for compatibility.
 
 ```js
 // Inspect the current immutable configuration snapshot.
@@ -125,7 +125,6 @@ Use the [issue templates](https://github.com/NeonTideX/APS/issues/new/choose) fo
 - [Changelog](CHANGELOG.md) and [Releases](https://github.com/NeonTideX/APS/releases)
 - [Contributing](CONTRIBUTING.md), [community conduct](CODE_OF_CONDUCT.md), and [support](SUPPORT.md)
 - [Security policy](SECURITY.md)
-
 
 ## License
 
