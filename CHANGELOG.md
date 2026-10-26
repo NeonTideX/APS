@@ -2,9 +2,19 @@
 
 ## [Unreleased]
 
-Changes after the latest published version will be recorded here.
+### V1 runtime refactor - 2026-10-26
 
-## [1.0.0] - 2026-10-25
+- Keep the product name at V1 and the machine-readable version at 1.0.0.
+- Restore scheduler execution after pause/resume and background-to-foreground transitions.
+- Rebuild deadline ordering after rescheduling and discard stale entries when a task replaces itself.
+- Charge recovery budgets only when a deduplicated request starts execution; preserve queued work when admission is temporarily blocked.
+- Execute strategies sequentially per media element with playback verification, preventing overlapping recovery side effects.
+- Bound the entire recovery attempt with a cancellation-aware deadline, including hung player promises and escalation.
+- Cancel recovery on deliberate pause, media removal, and teardown; release dispatcher slots and cancellation listeners.
+- Reopen failed half-open circuit probes and honor disabled recovery and muted-fallback settings.
+- Extend automated coverage to scheduler transitions, queue admission, cancellation, and late promise settlement.
+
+## V1 ([1.0.0]) - 2026-10-25
 
 Initial public release of AntiPause Suite, distributed as the standalone `APS.user.js` userscript.
 

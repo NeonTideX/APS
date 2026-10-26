@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         AntiPause Suite
+// @name         AntiPause Suite V1
 // @namespace    aps-v23
 // @version      1.0.0
 // @description  Recover unexpected media pauses with user-intent detection, playback monitoring, and background support.
@@ -193,7 +193,6 @@ const CONST = deepFreeze({
     BOOT_MAX_POLL_DELAY:         2_000,
     BOOT_INITIAL_DELAY:          50,
     BOOT_DELAY_MULTIPLIER:       1.5,
-    FLUSH_RETRY_BASE_MS:         100,
     FLUSH_DEFER_MS:              500,
     RULE_FETCH_TIMEOUT_MS:       10_000,
     LOCK_CHECK_INTERVAL:         5_000,
@@ -229,11 +228,6 @@ const CONST = deepFreeze({
     /* CircuitBreaker */
     HALF_OPEN_MAX_PROBES:        3,
     CB_ERROR_RING_SIZE:          200,
-
-    /* Dispatcher */
-    MAX_FLUSH_DEPTH:             5,
-    FLUSH_BACKOFF_MULTIPLIER:    2,
-    FLUSH_BACKOFF_MAX_MS:        5_000,
 
     /* Recovery Budget  [NEW] */
     RECOVERY_BUDGET_MAX:         30,
@@ -447,14 +441,28 @@ class CancellationToken {
     static linked(...tokens) {
         const combined = new CancellationToken();
         const cleanups = [];
+        combined.onCancel(() => { for (const c of cleanups) c(); cleanups.length = 0; });
         for (const t of tokens) {
             if (t.cancelled) { combined.cancel(); return combined; }
             const fn = () => combined.cancel();
             t.onCancel(fn);
             cleanups.push(() => t.removeCancelListener(fn));
         }
-        combined.onCancel(() => { for (const c of cleanups) c(); cleanups.length = 0; });
         return combined;
+    }
+
+    // Settle the caller on cancellation even when an external promise hangs.
+    run(task) {
+        return new Promise((resolve, reject) => {
+            const cancelled = () => reject(new APSError('Operation cancelled', {
+                code: 'E_CANCELLED', recoverable: false
+            }));
+            this.onCancel(cancelled);
+            Promise.resolve().then(() => {
+                this.throwIfCancel();
+                return task();
+            }).then(resolve, reject).finally(() => this.removeCancelListener(cancelled));
+        });
     }
 }
 
@@ -700,7 +708,7 @@ const LIMITS = deepFreeze({
     HEAP_COMPACT_INTERVAL:60000, ESCALATION_MAX_DEPTH:10,
     HLS_MAX_SCHEDULE_COUNT:500, BRIDGE_PROTOCOL_VERSION:3,
     RECOVERY_MAX_CONCURRENT:3, CACHE_PRUNE_INTERVAL:60000,
-    MSE_EMPTIED_GRACE_MULT:10, PARALLEL_RACE_PRIORITY_THRESHOLD:80,
+    MSE_EMPTIED_GRACE_MULT:10,
     FRAME_BRIDGE_ORIGIN_MAX: CONST.FRAME_BRIDGE_ORIGIN_CAPACITY
 });
 
@@ -1114,8 +1122,11 @@ const CircuitBreaker = {
         }, cfg.cooldownMs);
     },
     isOpen() { return this._state === 'open'; },
+    canRequest() {
+        return !this.isOpen() && (this._state !== 'half-open' || this._halfOpenAttempts < CONST.HALF_OPEN_MAX_PROBES);
+    },
     allowRequest() {
-        if (this.isOpen()) return false;
+        if (!this.canRequest()) return false;
         if (this._state === 'half-open') {
             this._halfOpenAttempts++;
             return this._halfOpenAttempts <= CONST.HALF_OPEN_MAX_PROBES;
@@ -1124,6 +1135,9 @@ const CircuitBreaker = {
     },
     recordSuccess() {
         if (this._state === 'half-open') { this._state = 'closed'; Logger.log('CircuitBreaker: half-open → CLOSED'); }
+    },
+    recordFailure() {
+        if (this._state === 'half-open') this._open();
     },
     reset() {
         const wasOpen = this.isOpen();
@@ -1148,19 +1162,30 @@ const Native = {
     doc: { visibilityStateGetter:null, hiddenGetter:null, hasFocus:null },
     obj: { defineProperty: Object.defineProperty, getOwnPropertyDescriptor: Object.getOwnPropertyDescriptor },
     safePlay(m){ try{ return this.media.play.call(m); }catch(e){ return Promise.reject(e); } },
+    playWithCancellation(media, token = null) {
+        return token ? token.run(() => this.safePlay(media)) : this.safePlay(media);
+    },
     safePause(m){ try{ this.media.pause.call(m); }catch(e){ Logger.trace('safePause',e); } },
     safeLoad(m){ try{ this.media.load.call(m); }catch(e){ Logger.trace('safeLoad',e); } },
-    async safePlayWithFallback(media, restoreAfter = TIMING.MUTED_RESTORE_DEFAULT, instance = null) {
+    async safePlayWithFallback(media, restoreAfter = TIMING.MUTED_RESTORE_DEFAULT, instance = null, token = null) {
         /* [FIX-E1] Soft check – log but do not block */
         if (!navigator.onLine) Logger.debug('safePlayWithFallback: navigator.onLine false, attempting anyway');
-        try { await this.safePlay(media); }
+        const play = () => {
+            token?.throwIfCancel();
+            if (instance?.userPaused || instance?.state === MEDIA_STATE.DESTROYED)
+                throw new APSError('Playback cancelled', { code: 'E_CANCELLED' });
+            return this.safePlay(media);
+        };
+        try { await (token ? token.run(play) : play()); }
         catch (err) {
+            if (token?.cancelled || err?.code === 'E_CANCELLED' || !getConfig().recovery.mutedFallback) throw err;
             const wasMuted = media.muted;
             if (!wasMuted) {
                 try { media.muted = true; }
                 catch (e) { Logger.trace('safePlayWithFallback:mute', e); throw err; }
                 try {
-                    await this.safePlay(media);
+                    await (token ? token.run(play) : play());
+                    if (instance?._muteRestoreTimer) clearTimeout(instance._muteRestoreTimer);
                     const timerId = setTimeout(() => {
                         try { if (media.isConnected) media.muted = false; }
                         catch (e) { Logger.trace('mute-restore', e); }
@@ -1229,6 +1254,7 @@ const Utils = {
     async safeAsync(fn, label) {
         try { return { ok:true, value: await fn() }; }
         catch (e) {
+            if (e?.code === 'E_CANCELLED') return { ok:false, value:undefined, error:e };
             RuntimeState.errors++; Logger.warn(label||'safeAsync', e);
             const rm = ServiceContainer.get('runtimeMonitor'); if(rm?.stats) rm.stats.errors++;
             CircuitBreaker.record();
@@ -1637,17 +1663,22 @@ const Scheduler = {
 
     _heapPush(task) { this._heap.push(task); this._siftUp(this._heap.length - 1); },
 
+    _rebuildHeap() {
+        this._heap = this._heap.filter(task => !task.cancelled && this._taskMap.get(task.id) === task);
+        for (let i = (this._heap.length >> 1) - 1; i >= 0; i--) this._siftDown(i);
+    },
+
     _heapPop() {
         while (this._heap.length > 0) {
             if (this._heap.length === 1) {
                 const t = this._heap.pop();
-                if (!t.cancelled && this._taskMap.has(t.id)) return t;
+                if (!t.cancelled && this._taskMap.get(t.id) === t) return t;
                 continue;
             }
             const top = this._heap[0];
             this._heap[0] = this._heap.pop();
             this._siftDown(0);
-            if (!top.cancelled && this._taskMap.has(top.id)) return top;
+            if (!top.cancelled && this._taskMap.get(top.id) === top) return top;
         }
         return null;
     },
@@ -1686,13 +1717,13 @@ const Scheduler = {
     },
     resumeTask(id) {
         const t = this._taskMap.get(id);
-        if (t) { t.paused = false; t.nextRun = Clock.mono(); }
+        if (t) { t.paused = false; t.nextRun = Clock.mono(); this._rebuildHeap(); }
     },
 
-    reschedule(id) { const t = this._taskMap.get(id); if (t) t.nextRun = 0; },
-    rescheduleAll() { for (const [, t] of this._taskMap) t.nextRun = 0; },
+    reschedule(id) { const t = this._taskMap.get(id); if (t) { t.nextRun = 0; this._rebuildHeap(); } },
+    rescheduleAll() { for (const [, t] of this._taskMap) t.nextRun = 0; this._rebuildHeap(); },
 
-    pause() { this._paused = true; this._stopLoop(); },
+    pause() { this._paused = true; this._running = false; this._stopLoop(); },
 
     resume() {
         if (this._paused) {
@@ -1703,6 +1734,7 @@ const Scheduler = {
                 t.nextRun = n + offset + Math.random() * this._interval(t) * CONST.SCHEDULER_JITTER_FACTOR;
                 offset += TIMING.MIN_SCHEDULER_DELAY;
             }
+            this._rebuildHeap();
             this._ensureRunning();
         }
     },
@@ -1725,6 +1757,7 @@ const Scheduler = {
                 }
             }
         }
+        this._rebuildHeap();
     },
 
     _updateFPS(now) {
@@ -1749,7 +1782,7 @@ const Scheduler = {
         const cpuMult = (cfg.scheduler.fps && PerfState.cpuLoad > cfg.scheduler.highLoadThreshold) ? 2 : 1;
         const budgetMs = vis ? LIMITS.SCHEDULER_TICK_BUDGET_MS : LIMITS.SCHEDULER_TICK_BUDGET_MS * 2;
 
-        while (this._heap.length > 0 && this._heap[0].nextRun <= now) {
+        while (!this._paused && this._heap.length > 0 && this._heap[0].nextRun <= now) {
             const task = this._heapPop();
             if (!task) break;
 
@@ -1773,6 +1806,7 @@ const Scheduler = {
 
             const runs = task._compensateCount > 0 ? task._compensateCount + 1 : 1;
             for (let r = 0; r < runs; r++) {
+                if (this._paused || task.cancelled || this._taskMap.get(task.id) !== task) break;
                 try {
                     const taskT0 = Clock.mono();
                     task.fn(now);
@@ -1795,7 +1829,7 @@ const Scheduler = {
             }
             task._compensateCount = 0;
 
-            if (!this._taskMap.has(task.id)) continue;
+            if (task.cancelled || this._taskMap.get(task.id) !== task) continue;
 
             const effectiveMult = (task.critical && cfg.scheduler.priorityBoost) ? 1 : bgMult;
             task.nextRun = now + this._interval(task) * effectiveMult * cpuMult * this.scale;
@@ -1813,6 +1847,7 @@ const Scheduler = {
         this._running = true;
         this._lastFrameTime = Clock.mono();
         const rafLoop = () => {
+            this._rafId = null;
             if (!this._running || this._paused) return;
             if (this._taskMap.size === 0) {
                 this._running = false;
@@ -1821,7 +1856,7 @@ const Scheduler = {
             }
             if (Utils.visible()) {
                 this._tick(Clock.mono());
-                this._rafId = requestAnimationFrame(rafLoop);
+                if (this._running && !this._paused) this._rafId = requestAnimationFrame(rafLoop);
             } else {
                 this._hiddenSince = Clock.mono();
                 this._rafId = null;
@@ -1834,14 +1869,16 @@ const Scheduler = {
     _startTimer() {
         if (this._timerId || this._paused) return;
         const loop = () => {
+            this._timerId = null;
             if (!this._running || this._paused) { this._timerId = null; return; }
             if (Utils.visible()) {
-                this._timerId = null;
+                this._running = false;
                 this.onVisibilityReturn();
                 this._ensureRunning();
                 return;
             }
             this._tick(Clock.mono());
+            if (!this._running || this._paused) return;
             const delay = this._getNextDelay();
             this._timerId = setTimeout(loop, delay);
         };
@@ -1987,6 +2024,7 @@ const StateMachine = {
         try {
             this._clearStateTimer(instance);
             instance.state = next;
+            if (next === MEDIA_STATE.PAUSED_USER) RecoveryEngine.cancelRecovery(instance.media);
             const record = { from: old, to: next, reason, time: Clock.wall() };
             if (!instance.historyRing)
                 instance.historyRing = new RingHistory(getConfig().limits.historyLength);
@@ -2016,7 +2054,10 @@ const StateMachine = {
 };
 
 MediaStore._onRemove = (instance) => {
-    if (instance) instance.state = MEDIA_STATE.DESTROYED;
+    if (instance) {
+        instance.state = MEDIA_STATE.DESTROYED;
+        RecoveryEngine.cancelRecovery(instance.media);
+    }
     StateMachine.cleanupInstance(instance);
 };
 
@@ -3755,31 +3796,27 @@ const RecoveryBudget = {
 
     canProceed() {
         const now = Clock.wall();
-        if (now - this._windowStart > CONST.RECOVERY_BUDGET_WINDOW_MS) {
+        if (now - this._windowStart >= CONST.RECOVERY_BUDGET_WINDOW_MS) {
             this._windowStart = now;
             this._totalAttempts = 0;
         }
+        if (this._totalAttempts >= CONST.RECOVERY_BUDGET_MAX) return false;
         this._totalAttempts++;
-        if (this._totalAttempts > CONST.RECOVERY_BUDGET_MAX) {
-            Logger.warn('RecoveryBudget: window limit reached, deferring');
-            return false;
-        }
         return true;
     },
     reset() { this._windowStart = 0; this._totalAttempts = 0; }
 };
 
-/* [FIX-P0.4] CircuitBreaker.allowRequest() enforced */
-/* [NEW-F3] Active-instance priority boost */
+const RECOVERY_REASONS = new Set(Object.values(RecoveryReason));
+
+// Admission budgets are charged by the dispatcher only when execution starts.
 function enqueueRecovery(ins, reason, priorityOverride) {
     if (!ins || !ins.media) return;
     if (ins.state === MEDIA_STATE.DESTROYED) return;
     if (ins.userPaused) return;
     if (!RecoveryThrottle.canAttempt(ins.media)) return;
-    if (!CircuitBreaker.allowRequest()) return;
-    /* [NEW-A6] Global budget check */
-    if (!RecoveryBudget.canProceed()) return;
-    if (!Object.values(RecoveryReason).includes(reason)) {
+    if (APS.destroyed || !getConfig().recovery.enabled) return;
+    if (!RECOVERY_REASONS.has(reason)) {
         Logger.warn('Unknown recovery reason, remapping:', reason);
         reason = RecoveryReason.UNKNOWN;
     }
@@ -3890,71 +3927,73 @@ const ESCALATION_MAP = Object.freeze({
 });
 
 /* [NEW-D3] Shared play helper */
-async function tryPlay(ins) {
-    await Native.safePlayWithFallback(ins.media, TIMING.MUTED_RESTORE_DEFAULT, ins);
+async function tryPlay(ins, token = null) {
+    token?.throwIfCancel();
+    await Native.safePlayWithFallback(ins.media, TIMING.MUTED_RESTORE_DEFAULT, ins, token);
     return !ins.media.paused;
 }
 
 const STRATEGY_DEFINITIONS = {
     adapter: {
-        fn: async (ins) => {
+        fn: async (ins, _reason, token) => {
             const r = SitePluginRegistry.recover(ins);
             if (!r.ok) Logger.warn('adapter recover plugin step failed', r.error);
-            return tryPlay(ins);
+            return tryPlay(ins, token);
         },
         opts: { priority: 100 }
     },
     drm: {
-        fn: async (ins) => {
+        fn: async (ins, _reason, token) => {
             try {
-                await Native.media.play.call(ins.media);
+                await Native.playWithCancellation(ins.media, token);
                 if (!ins.media.paused) return true;
-                await Utils.sleep(TIMING.DRM_RETRY_DELAY);
-                await Native.media.play.call(ins.media);
+                await Utils.sleep(TIMING.DRM_RETRY_DELAY, token);
+                token?.throwIfCancel();
+                await Native.playWithCancellation(ins.media, token);
                 return !ins.media.paused;
             } catch (_) { return false; }
         },
         opts: { priority: 90, condition: (ins, reason) => reason === RecoveryReason.DRM }
     },
     seek: {
-        fn: async (ins) => {
+        fn: async (ins, _reason, token) => {
             const m = ins.media;
             if (m.seekable.length > 0) {
                 const end = m.seekable.end(m.seekable.length - 1);
                 m.currentTime = Math.min(m.currentTime + TIMING.SEEK_NUDGE, end);
             }
-            await Native.media.play.call(m);
+            await Native.playWithCancellation(m, token);
             return !m.paused;
         },
         opts: { priority: 80 }
     },
     muted: {
-        fn: async (ins) => {
+        fn: async (ins, _reason, token) => {
             if (!getConfig().recovery.mutedFallback || ins.media.muted) return false;
             const old = ins.media.muted;
             try {
                 ins.media.muted = true;
-                await Native.media.play.call(ins.media);
+                await Native.playWithCancellation(ins.media, token);
                 if (!ins.media.paused) { ins.restoreMute = old; return true; }
             } catch (e) { Logger.trace('muted-strategy', e); }
-            finally { if (ins.media.paused) { try { ins.media.muted = old; } catch (_) {} } }
+            finally { if (token?.cancelled || ins.media.paused) { try { ins.media.muted = old; } catch (_) {} } }
             return false;
         },
         opts: { priority: 70 }
     },
     native: {
-        fn: async (ins) => {
-            await Native.media.play.call(ins.media);
+        fn: async (ins, _reason, token) => {
+            await Native.playWithCancellation(ins.media, token);
             return !ins.media.paused;
         },
         opts: { priority: 60 }
     },
     'soft-resume': {
-        fn: async (ins) => tryPlay(ins),
+        fn: async (ins, _reason, token) => tryPlay(ins, token),
         opts: { priority: 50 }
     },
     'buffer-recover': {
-        fn: async (ins) => {
+        fn: async (ins, _reason, token) => {
             try {
                 const m = ins.media;
                 if (m.seekable.length > 0) {
@@ -3962,39 +4001,46 @@ const STRATEGY_DEFINITIONS = {
                     m.currentTime = Math.min(m.currentTime + TIMING.SEEK_NUDGE, end);
                 }
             } catch (e) { Logger.trace('buffer-recover-seek', e); }
-            return tryPlay(ins);
+            return tryPlay(ins, token);
         },
         opts: { priority: 55 }
     },
     'stream-rebuild': {
-        fn: async (ins) => {
+        fn: async (ins, _reason, token) => {
             StreamEngine.register(ins);
             StreamEngine.detect(ins);
-            return tryPlay(ins);
+            return tryPlay(ins, token);
         },
         opts: { priority: 45 }
     },
     'player-delegate': {
-        fn: async (ins) => {
+        fn: async (ins, _reason, token) => {
             SitePluginRegistry.recover(ins);
-            await Utils.sleep(TIMING.PLAYER_DELEGATE_WAIT);
-            if (ins.media.paused) return tryPlay(ins);
+            await Utils.sleep(TIMING.PLAYER_DELEGATE_WAIT, token);
+            token?.throwIfCancel();
+            if (ins.media.paused) return tryPlay(ins, token);
             return !ins.media.paused;
         },
         opts: { priority: 40 }
     },
     'hard-reload': {
-        fn: async (ins) => {
+        fn: async (ins, _reason, token) => {
             const media = ins.media;
             const src = media.currentSrc || media.src;
             if (!src) return false;
             media.src = '';
             media.removeAttribute('src');
-            await Utils.sleep(TIMING.HARD_RELOAD_CLEAR_WAIT);
+            await Utils.sleep(TIMING.HARD_RELOAD_CLEAR_WAIT, token);
+            if (token?.cancelled && media.isConnected && !media.getAttribute('src')) {
+                // Restore the source cleared by this attempt without resuming playback.
+                media.src = src;
+            }
+            token?.throwIfCancel();
             media.src = src;
             Native.safeLoad(media);
-            await Utils.sleep(TIMING.HARD_RELOAD_LOAD_WAIT);
-            return tryPlay(ins);
+            await Utils.sleep(TIMING.HARD_RELOAD_LOAD_WAIT, token);
+            token?.throwIfCancel();
+            return tryPlay(ins, token);
         },
         opts: {
             priority: 30,
@@ -4048,7 +4094,7 @@ const RetryStrategy = {
 
 /* ═══════════════════════════════════════════════════════════
  * §32  Recovery Dispatcher
- * [FIX-P1.3] Exponential backoff on flush depth limit.
+ * Deduplicate requests and apply admission limits at execution time.
  * @provides: RecoveryDispatcher, recoverActive, recoverAll
  * ═══════════════════════════════════════════════════════════ */
 const RecoveryDispatcher = {
@@ -4056,25 +4102,26 @@ const RecoveryDispatcher = {
     _inflight: new Map(),
     _flushScheduled: false,
     _flushing: false,
-    _flushDepth: 0,
-    _flushBackoff: CONST.FLUSH_RETRY_BASE_MS,
+    _stopped: false,
     _executor: null,
 
     isInflight(media) { return this._inflight.has(media); },
 
     enqueue(instance, reason, priority = 0) {
-        if (!instance?.media) return;
+        if (this._stopped || APS.destroyed || !instance?.media) return;
         if (instance.state === MEDIA_STATE.DESTROYED) return;
         if (instance.userPaused) return;
         if (this._inflight.has(instance.media)) return;
         const existing = this._queue.get(instance.media);
         if (existing && existing.priority >= priority) return;
-        this._queue.set(instance.media, { instance, reason, priority, ts: Clock.wall() });
+        const now = Clock.wall();
+        this._queue.set(instance.media, { instance, reason, priority,
+            ts: existing?.ts ?? now, agedAt: existing?.agedAt ?? now });
         this._scheduleFlush();
     },
 
     _scheduleFlush() {
-        if (this._flushScheduled) return;
+        if (this._flushScheduled || this._stopped || APS.destroyed) return;
         this._flushScheduled = true;
         queueMicrotask(() => {
             this._flushScheduled = false;
@@ -4082,51 +4129,45 @@ const RecoveryDispatcher = {
         });
     },
 
-    /* [FIX-P1.3] Exponential backoff instead of fixed 100ms */
     _flush() {
-        if (this._flushing) return;
-        if (this._flushDepth >= CONST.MAX_FLUSH_DEPTH) {
-            Logger.warn('RecoveryDispatcher: flush depth limit, backing off', this._flushBackoff);
-            const delay = this._flushBackoff;
-            this._flushBackoff = Math.min(this._flushBackoff * CONST.FLUSH_BACKOFF_MULTIPLIER, CONST.FLUSH_BACKOFF_MAX_MS);
-            setTimeout(() => {
-                this._flushBackoff = CONST.FLUSH_RETRY_BASE_MS;
-                this._flush();
-            }, delay);
-            return;
-        }
+        if (this._flushing || this._stopped || APS.destroyed) return;
+        if (!getConfig().recovery.enabled) { this.clear(); return; }
+        if (!this._executor || !this._queue.size ||
+            this._inflight.size >= LIMITS.RECOVERY_MAX_CONCURRENT || !CircuitBreaker.canRequest()) return;
         this._flushing = true;
-        this._flushDepth++;
         try {
-            if (CircuitBreaker.isOpen()) { this._queue.clear(); return; }
-            if (this._queue.size === 0) return;
-            if (!this._executor) { Logger.warn('RecoveryDispatcher: no executor set'); return; }
-
             const now = Clock.wall();
             for (const [, item] of this._queue) {
-                if (now - item.ts > TIMING.PRIORITY_AGE_INTERVAL &&
+                if (now - item.agedAt >= TIMING.PRIORITY_AGE_INTERVAL &&
                     item.priority < THRESHOLDS.MAX_AGED_PRIORITY) {
                     item.priority++;
-                    item.ts = now;
+                    item.agedAt = now;
                 }
             }
 
             const items = [...this._queue.values()]
                 .sort((a, b) => b.priority - a.priority || a.ts - b.ts);
-            this._queue.clear();
-
             for (const item of items) {
-                const { instance, reason, priority } = item;
+                const { instance, reason } = item;
                 const media = instance.media;
-                if (this._inflight.has(media)) continue;
-                if (this._inflight.size >= LIMITS.RECOVERY_MAX_CONCURRENT) {
-                    this._queue.set(media, { instance, reason, priority: item.priority, ts: item.ts });
+                if (instance.userPaused || instance.state === MEDIA_STATE.DESTROYED ||
+                    !media.isConnected || this._inflight.has(media) || !RecoveryThrottle.canAttempt(media)) {
+                    this._queue.delete(media);
                     continue;
                 }
-                const p = Utils.safeAsync(
-                    () => this._executor(instance, reason),
+                if (this._inflight.size >= LIMITS.RECOVERY_MAX_CONCURRENT ||
+                    !CircuitBreaker.canRequest() || !RecoveryBudget.canProceed()) break;
+                if (!CircuitBreaker.allowRequest()) break;
+                this._queue.delete(media);
+                // Register the slot before invoking user-provided strategy code.
+                const p = Promise.resolve().then(() => Utils.safeAsync(
+                    () => this._stopped || APS.destroyed ? false : this._executor(instance, reason),
                     'dispatch:' + reason
-                ).finally(() => {
+                )).then(result => {
+                    if (this._stopped || APS.destroyed) return;
+                    if (result.ok && result.value === true) CircuitBreaker.recordSuccess();
+                    else CircuitBreaker.recordFailure();
+                }).finally(() => {
                     this._inflight.delete(media);
                     if (this._queue.size > 0) this._scheduleFlush();
                 });
@@ -4134,12 +4175,12 @@ const RecoveryDispatcher = {
             }
         } finally {
             this._flushing = false;
-            this._flushDepth--;
         }
     },
 
     flush() { this._flush(); },
     clear() { this._queue.clear(); },
+    stop() { this._stopped = true; this.clear(); },
     get size() { return this._queue.size; },
     get pending() { return this._inflight.size; }
 };
@@ -4174,8 +4215,7 @@ const RecoveryEngine = {
     async recover(instance, reason = RecoveryReason.UNKNOWN) {
         const media = instance?.media;
         if (!instance || !media) return false;
-        if (instance.state === MEDIA_STATE.DESTROYED) return false;
-        if (instance.userPaused || media.error) return false;
+        if (!this._canContinue(instance)) return false;
         if (this.recovering.has(media)) return false;
         if (!RecoveryThrottle.canAttempt(media)) return false;
 
@@ -4191,28 +4231,42 @@ const RecoveryEngine = {
         this._cancelTokens.set(media, token);
 
         const cfg = getConfig();
+        const startedAt = Clock.wall();
+        let timedOut = false;
+        const abort = () => token.cancel();
+        instance.ac?.signal.addEventListener('abort', abort, { once: true });
+        if (instance.ac?.signal.aborted) token.cancel();
         const guard = setTimeout(() => {
-            if (this.recovering.has(media)) {
-                log.warn('guard timeout – force clearing');
-                token.cancel();
-                this.recovering.delete(media);
-                instance.recovering = false;
-                instance._recoveryReason = null;
-                StateMachine.transition(instance, MEDIA_STATE.PAUSED_AUTO, REASONS.RECOVER_GUARD_TIMEOUT);
-            }
-        }, cfg.recovery.recoveringTimeout);
+            timedOut = true;
+            token.cancel();
+        }, Math.min(cfg.recovery.timeout, cfg.recovery.recoveringTimeout));
         this._guardTimers.set(media, guard);
 
         try {
-            return await this._doRecover(instance, reason, token, log);
+            return await token.run(() => this._doRecover(instance, reason, token, log));
+        } catch (error) {
+            if (error?.code !== 'E_CANCELLED') throw error;
+            if (timedOut && this._canContinue(instance))
+                return this._finalizeRecovery(instance, reason, false, null, true, startedAt);
+            return false;
         } finally {
             clearTimeout(guard);
-            this._guardTimers.delete(media);
-            this._cancelTokens.delete(media);
-            this.recovering.delete(media);
-            instance.recovering = false;
-            instance._recoveryReason = null;
+            instance.ac?.signal.removeEventListener('abort', abort);
+            token.cancel();
+            if (this._cancelTokens.get(media) === token) {
+                this._guardTimers.delete(media);
+                this._cancelTokens.delete(media);
+                this.recovering.delete(media);
+                instance.recovering = false;
+                instance._recoveryReason = null;
+            }
         }
+    },
+
+    _canContinue(instance, token = null) {
+        return !APS.destroyed && !token?.cancelled && getConfig().recovery.enabled &&
+            !instance.userPaused && instance.state !== MEDIA_STATE.DESTROYED &&
+            instance.media.isConnected && !instance.media.error;
     },
 
     cancelRecovery(media) {
@@ -4225,7 +4279,7 @@ const RecoveryEngine = {
         const t0 = Clock.wall();
         const cfg = getConfig();
 
-        if (token.cancelled) return false;
+        if (!this._canContinue(instance, token)) return false;
         if (!this._prepareRecovery(instance, reason)) return false;
 
         const siteConfig = SitePluginRegistry.config;
@@ -4237,20 +4291,21 @@ const RecoveryEngine = {
 
         if (count > maxRetry) {
             const escalated = await this._escalate(instance, reason, t0, token, log);
+            if (!this._canContinue(instance, token)) return false;
             if (escalated) return true;
             return this._finalizeRecovery(instance, reason, false, null, false, t0);
         }
 
-        const { success, usedStrategy, timedOut, rejected } =
+        const { success, usedStrategy, rejected } =
             await this._executeStrategies(instance, reason, siteConfig, count, token, log);
 
-        if (token.cancelled) return false;
+        if (!this._canContinue(instance, token)) return false;
 
         if (success) return this._finalizeRecovery(instance, reason, true, usedStrategy, false, t0);
-        if (timedOut) return this._finalizeRecovery(instance, reason, false, usedStrategy, true, t0);
         if (rejected) return this._finalizeRecovery(instance, reason, false, null, false, t0);
 
         const escalated = await this._escalate(instance, reason, t0, token, log);
+        if (!this._canContinue(instance, token)) return false;
         if (escalated) return true;
         return this._finalizeRecovery(instance, reason, false, usedStrategy, false, t0);
     },
@@ -4273,91 +4328,62 @@ const RecoveryEngine = {
     async _executeStrategies(instance, reason, siteConfig, count, token, log) {
         const cfg = getConfig();
         let success = false, usedStrategy = null;
-        let timedOut = false;
-        const timer = setTimeout(() => { timedOut = true; token.cancel(); }, cfg.recovery.timeout);
+        if (!LearningEngine.shouldRecover(location.hostname, reason)) {
+            StateMachine.transition(instance, MEDIA_STATE.PAUSED_AUTO, REASONS.BLOCKED_BY_LEARNING);
+            return { success: false, usedStrategy: null, rejected: true };
+        }
 
+        const failure = FailureClassifier.classify(instance);
+        if (failure) {
+            const decision = StrategyRouter.route(instance, failure);
+            if (!decision.execute) {
+                log.debug('Router rejected:', decision.strategy, decision.reason);
+                Telemetry.push({ type: 'recovery-rejected', strategy: decision.strategy, reason: decision.reason });
+                return { success: false, usedStrategy: null, rejected: true };
+            }
+        }
+
+        const plan = RecoveryPlanner.plan(instance, reason);
+        if (plan.delay > 0) await Utils.sleep(plan.delay, token);
+        if (token.cancelled)
+            return { success: false, usedStrategy: null, rejected: false };
+
+        // Snapshot the chain; runtime registration cannot reorder an active attempt.
+        const chain = [...RecoveryStrategyRegistry.chain()];
+
+        const attempt = async () => {
+            const serialResult = await this._serialPhase(chain, instance, reason, token);
+            if (serialResult) {
+                usedStrategy = serialResult.strategy;
+                return true;
+            }
+            throw new APSError('Recovery strategies exhausted', { code: 'E_RECOVERY_FAILED' });
+        };
+
+        const chainAttempts = Math.max(1, Math.min(count, 3));
         try {
-            if (!LearningEngine.shouldRecover(location.hostname, reason)) {
-                StateMachine.transition(instance, MEDIA_STATE.PAUSED_AUTO, REASONS.BLOCKED_BY_LEARNING);
-                return { success: false, usedStrategy: null, timedOut: false, rejected: true };
-            }
+            success = await RetryStrategy.execute(attempt, { retry: chainAttempts }, token);
+        } catch (e) { log.debug('chain-exhausted', e); success = false; }
 
-            const failure = FailureClassifier.classify(instance);
-            if (failure) {
-                const decision = StrategyRouter.route(instance, failure);
-                if (!decision.execute) {
-                    log.debug('Router rejected:', decision.strategy, decision.reason);
-                    Telemetry.push({ type: 'recovery-rejected', strategy: decision.strategy, reason: decision.reason });
-                    return { success: false, usedStrategy: null, timedOut: false, rejected: true };
-                }
-            }
-
-            const plan = RecoveryPlanner.plan(instance, reason);
-            if (plan.delay > 0) await Utils.sleep(plan.delay, token);
-            if (token.cancelled)
-                return { success: false, usedStrategy: null, timedOut, rejected: false };
-
-            const chain = RecoveryStrategyRegistry.chain();
-            const raceCandidates = chain.filter(s =>
-                s.effectivePriority >= LIMITS.PARALLEL_RACE_PRIORITY_THRESHOLD &&
-                (!s.condition || s.condition(instance, reason)));
-            const serialCandidates = chain.filter(s =>
-                s.effectivePriority < LIMITS.PARALLEL_RACE_PRIORITY_THRESHOLD &&
-                (!s.condition || s.condition(instance, reason)));
-
-            const attempt = async () => {
-                const raceResult = await this._racePhase(raceCandidates, instance, reason, token);
-                if (raceResult.success) {
-                    usedStrategy = raceResult.strategy;
-                    return true;
-                }
-                const serialResult = await this._serialPhase(serialCandidates, instance, reason, token);
-                if (serialResult) {
-                    usedStrategy = serialResult.strategy;
-                    return true;
-                }
-                return false;
-            };
-
-            const chainAttempts = Math.max(1, Math.min(count, 3));
-            try {
-                success = await RetryStrategy.execute(attempt, { retry: chainAttempts }, token);
-            } catch (e) { log.debug('chain-exhausted', e); success = false; }
-
-            if (!success && !token.cancelled) {
-                const base = siteConfig.interval ?? cfg.recovery.interval;
-                const backoff = Math.min(base * Math.pow(2, count - 1), cfg.recovery.maxBackoff);
-                await Utils.sleep(backoff, token);
-            }
-        } finally { clearTimeout(timer); }
-        return { success, usedStrategy, timedOut, rejected: false };
-    },
-
-    async _racePhase(candidates, instance, reason, token) {
-        if (candidates.length === 0 || token.cancelled) return { success: false, strategy: null };
-        try {
-            const results = await Promise.allSettled(
-                candidates.map(entry =>
-                    Utils.safeAsync(() => entry.fn(instance, reason), 'race:' + entry.name)
-                )
-            );
-            for (let i = 0; i < results.length; i++) {
-                const r = results[i];
-                if (r.status === 'fulfilled' && r.value.ok && r.value.value === true) {
-                    return { success: true, strategy: candidates[i].name };
-                }
-            }
-        } catch (e) { Logger.trace('parallel-race-error', e); }
-        return { success: false, strategy: null };
+        if (!success && !token.cancelled) {
+            const base = siteConfig.interval ?? cfg.recovery.interval;
+            const backoff = Math.min(base * Math.pow(2, count - 1), cfg.recovery.maxBackoff);
+            await Utils.sleep(backoff, token);
+        }
+        return { success, usedStrategy, rejected: false };
     },
 
     async _serialPhase(candidates, instance, reason, token) {
         for (const entry of candidates) {
-            if (token.cancelled) break;
-            if (instance.state === MEDIA_STATE.DESTROYED) break;
+            if (!this._canContinue(instance, token)) break;
+            if (entry.condition && !entry.condition(instance, reason)) continue;
             const r = await Utils.safeAsync(
-                () => entry.fn(instance, reason), 'strategy:' + entry.name);
-            if (r.ok && r.value === true) return { strategy: entry.name };
+                () => token.run(() => entry.fn(instance, reason, token)), 'strategy:' + entry.name);
+            if (r.ok && r.value === true && this._canContinue(instance, token)) {
+                await Utils.sleep(getConfig().recovery.verifyDelay, token);
+                if (this._canContinue(instance, token) && !instance.media.paused)
+                    return { strategy: entry.name };
+            }
         }
         return null;
     },
@@ -4369,7 +4395,7 @@ const RecoveryEngine = {
         let currentLevel = instance.recoveryLevel || RecoveryLevel.SOFT;
 
         while (depth < LIMITS.ESCALATION_MAX_DEPTH) {
-            if (token?.cancelled) return false;
+            if (!this._canContinue(instance, token)) return false;
             if (currentLevel >= cfg.recovery.maxLevel) {
                 StateMachine.transition(instance, MEDIA_STATE.FAILED, REASONS.MAX_LEVEL_REACHED);
                 return false;
@@ -4404,10 +4430,10 @@ const RecoveryEngine = {
 
             try {
                 const r = await Utils.safeAsync(
-                    () => def.fn(instance, reason), 'escalate:' + stratName);
+                    () => token.run(() => def.fn(instance, reason, token)), 'escalate:' + stratName);
                 if (r.ok && r.value === true) {
                     if (cfg.recovery.verifyDelay > 0) await Utils.sleep(cfg.recovery.verifyDelay, token);
-                    if (!instance.media.paused) {
+                    if (this._canContinue(instance, token) && !instance.media.paused) {
                         StateMachine.transition(instance, MEDIA_STATE.VERIFIED,
                             REASONS.ESCALATED_PREFIX + nextLevel);
                         instance.recoveryLevel = 0;
@@ -4424,6 +4450,7 @@ const RecoveryEngine = {
             depth++;
         }
 
+        if (!this._canContinue(instance, token)) return false;
         StateMachine.transition(instance, MEDIA_STATE.FAILED, REASONS.ALL_LEVELS_EXHAUSTED);
         return false;
     },
@@ -5615,7 +5642,7 @@ const Lifecycle = {
             for (const ins of MediaStore.list()) {
                 RecoveryEngine.cancelRecovery(ins.media);
             }
-            RecoveryDispatcher.clear();
+            RecoveryDispatcher.stop();
         })) return;
 
         /* Phase 3: Stop background services */
@@ -6135,7 +6162,7 @@ function configureRuntime(patch, { persist = false } = {}) {
  * ═══════════════════════════════════════════════════════════ */
 const CompositionRoot = {
     async init() {
-        if (APS.started) return;
+        if (APS.started || APS.destroyed) return;
         APS.started = true;
         RuntimeState.started = true;
         APS.lifecycle = APS_LIFECYCLE.BOOTING;
@@ -6213,6 +6240,7 @@ const CompositionRoot = {
 
     async _bootModules() {
         const allOk = await ModuleRegistry.startInLayers();
+        if (APS.destroyed) return;
         if (allOk && APS.lifecycle !== APS_LIFECYCLE.DEGRADED) {
             APS.lifecycle = APS_LIFECYCLE.READY;
         }

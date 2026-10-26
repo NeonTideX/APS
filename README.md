@@ -1,4 +1,4 @@
-# AntiPause Suite
+# AntiPause Suite V1
 
 [![CI](https://github.com/NeonTideX/APS/actions/workflows/ci.yml/badge.svg)](https://github.com/NeonTideX/APS/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/NeonTideX/APS)](https://github.com/NeonTideX/APS/releases/latest)
@@ -12,6 +12,8 @@ Install a userscript manager such as Tampermonkey or Violentmonkey, then downloa
 
 See the [V1 release notes](https://github.com/NeonTideX/APS/releases/tag/v1.0.0) for the release summary and downloadable assets.
 
+The [current V1 source](https://raw.githubusercontent.com/NeonTideX/APS/main/APS.user.js) includes the scheduler and recovery refactor on `main`. Import that file manually to try changes that are not yet included in the published release. Both identify as `1.0.0`, so your userscript manager will not distinguish them by version alone.
+
 The script runs at `document-start` on HTTP and HTTPS pages with `@grant none`. Disable other installations of APS before enabling it, then reload the page and start playback normally.
 
 ## Runtime architecture
@@ -21,8 +23,9 @@ The script runs at `document-start` on HTTP and HTTPS pages with `@grant none`. 
 | Discovery and registry | Scan audio/video elements, observe DOM changes, and inspect supported shadow roots and accessible iframe documents. |
 | Intent and scoring | Combine recent input, media state, visibility, and playback history to select active media and estimate whether a pause was deliberate. |
 | State machine and watchdog | Track playback transitions and detect stalled progress or overdue states. |
-| Recovery dispatcher | Prioritize recovery requests with per-media throttling, concurrency limits, and a global attempt budget. |
-| Strategy engine | Try player adapters, native playback, seeking, muted playback, and escalation steps according to configuration and media state. |
+| Scheduler | Maintain a deadline heap and switch between foreground animation frames and background timers; restore heap ordering after rescheduling. |
+| Recovery dispatcher | Deduplicate requests, preserve pending priorities, and apply throttling, concurrency limits, and the global budget when execution starts. |
+| Strategy engine | Execute strategies sequentially for each media element, verify playback, and cancel waiting work on timeout, removal, or deliberate pause. |
 | Circuit breaker | Suspend scheduling after repeated internal errors, allow limited probes after cooldown, and reopen on probe errors. |
 | Background services | Use workers, silent audio, wake locks, and visibility/focus hooks where the browser permits them. |
 
@@ -30,9 +33,13 @@ The normal flow is **discovery → intent assessment → state tracking → reco
 
 The implementation is organized into numbered sections in [`APS.user.js`](./APS.user.js). It is both the source and the installable artifact; there is no bundle or build step.
 
+Each recovery attempt has one cancellation scope and an overall deadline, bounded by the smaller of `recovery.timeout` and `recovery.recoveringTimeout`. A player promise that never settles cannot hold an APS dispatcher slot indefinitely. Cancellation prevents subsequent APS strategy steps; it cannot undo a native browser call or side effects already performed by third-party player code.
+
+Custom strategy functions may accept `(instance, reason, token)`. Existing two-argument strategies remain supported. Use the optional token's `signal`, `throwIfCancel()`, or `run(() => promise)` to cooperate with cancellation during asynchronous work.
+
 ## Configuration
 
-The page-context API is available as `window.__APS23`. The identifier and the `APS23_*` storage keys are compatibility identifiers; the current release version is **1.0.0**.
+The page-context API is available as `window.__APS23`. The identifier and the `APS23_*` storage keys are compatibility identifiers. The product version is **V1**; userscript metadata and package metadata use the machine-readable version **1.0.0**.
 
 ```js
 // Inspect the current immutable configuration snapshot.
@@ -103,7 +110,7 @@ Use Node.js 22 or newer. No package installation is required:
 npm run validate
 ```
 
-This checks userscript syntax and runs regression tests for configuration validation and isolation, history ordering, circuit-breaker transitions, navigation cleanup, missing recovery inputs, and version metadata. Tests execute source sections with controlled dependencies; they do not replace end-to-end playback testing in real browsers.
+This checks userscript syntax and runs regression tests for configuration isolation, history ordering, scheduler restart and heap ordering, queue admission and concurrency, cancellation and deadlines, circuit-breaker transitions, navigation cleanup, and version metadata. Deterministic timers and unresolved player promises exercise asynchronous failure cases. Tests execute source sections with controlled dependencies; they do not replace end-to-end playback testing in real browsers.
 
 The package is marked private to prevent accidental npm publication; distribution uses the userscript file in this public repository.
 
