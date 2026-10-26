@@ -12,7 +12,7 @@ Install a userscript manager such as Tampermonkey or Violentmonkey, then downloa
 
 See the [V1 release notes](https://github.com/NeonTideX/APS/releases/tag/v1.0.0) for the release summary and downloadable assets.
 
-The [current V1 source](https://raw.githubusercontent.com/NeonTideX/APS/main/APS.user.js) includes the scheduler and recovery refactor on `main`. Import that file manually to try changes that are not yet included in the published release. Both identify as `1.0.0`, so your userscript manager will not distinguish them by version alone.
+The V1 release includes the current scheduler and recovery implementation. If V1 is already installed, import the updated file manually: the machine-readable version remains `1.0.0`, so an automatic version check may not offer the refreshed file.
 
 The script runs at `document-start` on HTTP and HTTPS pages with `@grant none`. Disable other installations of APS before enabling it, then reload the page and start playback normally.
 

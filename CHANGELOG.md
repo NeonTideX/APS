@@ -1,48 +1,38 @@
 # Changelog
 
-## [Unreleased]
+## V1 (1.0.0) - 2026-10-26
 
-### V1 runtime refactor - 2026-10-26
-
-- Keep the product name at V1 and the machine-readable version at 1.0.0.
-- Restore scheduler execution after pause/resume and background-to-foreground transitions.
-- Rebuild deadline ordering after rescheduling and discard stale entries when a task replaces itself.
-- Charge recovery budgets only when a deduplicated request starts execution; preserve queued work when admission is temporarily blocked.
-- Execute strategies sequentially per media element with playback verification, preventing overlapping recovery side effects.
-- Bound the entire recovery attempt with a cancellation-aware deadline, including hung player promises and escalation.
-- Cancel recovery on deliberate pause, media removal, and teardown; release dispatcher slots and cancellation listeners.
-- Reopen failed half-open circuit probes and honor disabled recovery and muted-fallback settings.
-- Extend automated coverage to scheduler transitions, queue admission, cancellation, and late promise settlement.
-
-## V1 ([1.0.0]) - 2026-10-25
-
-Initial public release of AntiPause Suite, distributed as the standalone `APS.user.js` userscript.
+AntiPause Suite V1 is distributed as the standalone APS.user.js userscript under GPL-3.0-or-later.
 
 ### Playback and recovery
 
 - Discover audio and video elements through DOM observation, shadow-root scanning, and accessible iframe inspection.
 - Combine user-intent scoring, playback state tracking, and watchdog monitoring to detect unexpected pauses and stalls.
-- Dispatch recovery strategies with per-media throttling, concurrency limits, and a global attempt budget.
+- Execute recovery strategies sequentially for each media element and verify playback before accepting success.
 - Provide player adapters, background playback support, local learning, and a console diagnostics API.
 
-### Reliability
+### Scheduling and admission
 
-- Validate array settings, nested configuration types, unknown keys, and finite numeric values.
-- Isolate stored configuration from caller-owned objects and preserve immutable snapshots.
-- Read ring-buffer history in insertion order before and after reaching capacity.
-- Block recovery requests while the circuit is open, reopen after probe errors, and resume scheduling on manual reset.
-- Cancel circuit-breaker cooldown during teardown and preserve runtime state during back-forward cache navigation.
-- Safely ignore missing recovery instances.
+- Resume scheduling after pause/resume and background-to-foreground transitions.
+- Restore deadline-heap ordering after task rescheduling and discard replaced task entries.
+- Deduplicate recovery requests and charge budgets only when execution starts.
+- Enforce per-media throttling, bounded concurrency, request priorities, and a global attempt budget while preserving temporarily blocked queued work.
 
-### Repository maintenance
+### Cancellation and reliability
 
-- Complete community guidance, support links, release metadata, and tagged distribution.
+- Bound the entire recovery attempt, including hung player promises and escalation, with a cancellation-aware deadline.
+- Cancel waiting recovery work on deliberate pause, media removal, and teardown; release dispatcher slots, timers, and cancellation listeners.
+- Prevent late results from cancelled attempts from clearing newer recovery state.
+- Restore a source cleared by a cancelled hard reload without restarting playback.
+- Reopen failed half-open circuit probes and honor disabled recovery and muted-fallback settings.
+- Validate configuration types, arrays, unknown keys, and numeric values; isolate stored values from caller-owned objects.
+- Preserve ring-buffer history ordering and runtime state during back-forward cache navigation.
 
 ### Distribution and validation
 
-- Include technical documentation covering architecture, configuration, storage, and compatibility limits.
-- Provide JavaScript syntax checks and 15 automated regression tests; real-site playback compatibility requires browser testing.
-- License the project under GPL-3.0-or-later.
+- Include English technical documentation, contribution and support guidance, private security reporting, issue forms, and release instructions.
+- Run syntax checks and 34 regression tests, with CI on Node.js 22 and 24.
+- Publish the script, GPL license, technical documentation, changelog, and SHA-256 checksums from the same tagged commit.
+- Keep the product version at V1 and the machine-readable version at 1.0.0. Refreshed installations with the same version require manual import.
 
-[Unreleased]: https://github.com/NeonTideX/APS/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/NeonTideX/APS/releases/tag/v1.0.0
+Automated tests cover controlled runtime cases. Real-site playback compatibility requires browser testing.

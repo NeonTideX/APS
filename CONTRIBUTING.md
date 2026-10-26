@@ -22,7 +22,7 @@ Report vulnerabilities using the private channel described in [SECURITY.md](./SE
 
 ## Releases
 
-The current release is V1 (`1.0.0`), tagged `v1.0.0`. Repository maintenance can continue on `main` without changing the published userscript version.
+The current release is V1 (`1.0.0`), tagged `v1.0.0`. Keep userscript metadata, runtime metadata, package metadata, release notes, and download assets consistent.
 
 For a future runtime release:
 
@@ -33,7 +33,7 @@ For a future runtime release:
 5. Publish a GitHub Release for that tag with English notes and attach the exact `APS.user.js` and `LICENSE` files from the tagged commit.
 6. Update the README installation link to the published asset.
 
-Keep published tags and assets immutable. Use a new version for subsequent runtime changes rather than silently replacing an existing download. GitHub automatically provides source archives; no npm publication is required.
+An existing V1 release may be refreshed by an explicit maintainer decision. In that case, update its tag, notes, all download assets, and checksums together; do not leave attachments from the previous build. Document that users must manually reinstall a refreshed file when its version number is unchanged. See [RELEASING.md](./RELEASING.md) for the complete publication process. GitHub automatically provides source archives; no npm publication is required.
 
 Contributions are distributed under the project's GPL-3.0-or-later license.
 
